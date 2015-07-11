@@ -14,6 +14,9 @@ endif
 if OS400QC3
 include ../Makefile.os400qc3.inc
 endif
+if SECURETRANSPORT
+include ../Makefile.SecureTransport.inc
+endif
 
 # Makefile.inc provides the CSOURCES and HHEADERS defines
 include ../Makefile.inc
