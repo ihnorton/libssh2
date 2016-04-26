@@ -3,7 +3,6 @@
 #import <Security/Security.h>
 #import <CommonCrypto/CommonCrypto.h>
 #import <CommonCrypto/CommonDigest.h>
-#import "CommonBigNum.h"
 
 #define _libssh2_random(buf, len) SecRandomCopyBytes(kSecRandomDefault, len, buf)
 
@@ -96,49 +95,10 @@ extern int _libssh2_rsa_free(libssh2_rsa_ctx *rsa);
 typedef struct OpaqueSecKeyRef libssh2_dsa_ctx;
 extern int _libssh2_dsa_free(libssh2_dsa_ctx *dsa);
 
-/*******************************************************************/
-/*
- * SecureTransport BigNum implementation
- */
-/*
 typedef void *_libssh2_bn_ctx;
 #define _libssh2_bn_ctx_new() NULL
 #define _libssh2_bn_ctx_free(bnctx)
 
-#define _libssh2_bn struct _CCBigNumRef
-#define _libssh2_bn_init() CCCreateBigNum(NULL)
-#define _libssh2_bn_init_from_bin() _libssh2_bn_init()
-
-#define _libssh2_bn_rand(bn, bits, top, bottom) \
-do {\
-  if (bn != NULL) CCBigNumFree(bn);\
-  bn = CCBigNumCreateRandom(NULL, bits, bits, 0);\
-} while (0)
-
-#define _libssh2_bn_mod_exp(r, a, power, modulus, ctx) CCBigNumModExp(r, a, power, modulus)
-
-#define _libssh2_bn_set_word(bn, val) \
-do {\
-CCBigNumClear(bn);\
-CCBigNumAddI(bn, bn, val);\
-} while (0)
-
-#define _libssh2_bn_from_bin(bn, len, val)\
-do {\
-	if (bn != NULL) CCBigNumFree(bn);\
-	bn = CCBigNumFromData(NULL, val, len);\
-} while(0)
-#define _libssh2_bn_to_bin(bn, val) CCBigNumToData(NULL, bn, val)
-
-#define _libssh2_bn_bytes(bn) CCBigNumByteCount(bn)
-#define _libssh2_bn_bits(bn) CCBigNumBitCount(bn)
-
-#define _libssh2_bn_free(bn) CCBigNumFree(bn)
-*/
-
-typedef void *_libssh2_bn_ctx;
-#define _libssh2_bn_ctx_new() NULL
-#define _libssh2_bn_ctx_free(bnctx)
 
 /*******************************************************************/
 /*
@@ -152,11 +112,29 @@ struct _libssh2_st_bignum {
 
 #define _libssh2_bn struct _libssh2_st_bignum
 
-/*
- * SecureTransport backend: BigNumber functions
- */
+
+// SecureTransport backend: BigNumber functions
 
 _libssh2_bn *_libssh2_st_bignum_init(void);
+int
+_libssh2_st_bignum_rand(_libssh2_bn *rnd, int bits, int top, int bottom);
+int
+_libssh2_st_bignum_mod_exp(_libssh2_bn *r,
+                               _libssh2_bn *a,
+                               _libssh2_bn *p,
+                               _libssh2_bn *m,
+                               _libssh2_bn_ctx *bnctx);
+void
+_libssh2_st_bignum_from_bin(_libssh2_bn *bn, unsigned long len,
+                                const unsigned char *bin);
+unsigned long
+_libssh2_st_bignum_bits(const _libssh2_bn *bn);
+void
+_libssh2_st_bignum_free(_libssh2_bn *bn);
+void
+_libssh2_st_bignum_to_bin(const _libssh2_bn *bn, unsigned char *bin);
+int
+_libssh2_st_bignum_set_word(_libssh2_bn *bn, unsigned long word);
 
 #define _libssh2_bn_init() \
   _libssh2_st_bignum_init()
