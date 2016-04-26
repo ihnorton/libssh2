@@ -1,5 +1,7 @@
 /* Copyright (C) 2013-2014 Keith Duncan */
 
+#ifdef LIBSSH2_SECURETRANSPORT
+
 #import "securetransport.h"
 
 #include "libssh2_priv.h"
@@ -1667,3 +1669,315 @@ int _libssh2_pub_priv_keyfilememory(LIBSSH2_SESSION *session,
 
   return error;
 }
+
+/*******************************************************************/
+/*
+ * SecureTransport backend: BigNumber functions
+ */
+
+_libssh2_bn *
+_libssh2_st_bignum_init(void)
+{
+    _libssh2_bn *bignum;
+
+    bignum = (_libssh2_bn *)malloc(sizeof(_libssh2_bn));
+    if (bignum) {
+        bignum->bignum = NULL;
+        bignum->length = 0;
+    }
+
+    return bignum;
+}
+
+inline void
+_libssh2_st_zeromemory(void *p, size_t *l)
+{
+    volatile char *tmpp = p;
+    unsigned long tmpn = l;
+    while (tmpn--) *tmpp++ = 0;
+}
+
+static int
+_libssh2_st_bignum_resize(_libssh2_bn *bn, unsigned long length)
+{
+    unsigned char *bignum;
+
+    if (!bn)
+        return -1;
+
+    if (length == bn->length)
+        return 0;
+
+#ifdef LIBSSH2_CLEAR_MEMORY
+    if (bn->bignum && bn->length > 0 && length < bn->length) {
+        _libssh2_st_zeromemory(bn->bignum + length, bn->length - length);
+    }
+#endif
+
+    bignum = realloc(bn->bignum, length);
+    if (!bignum)
+        return -1;
+
+    bn->bignum = bignum;
+    bn->length = length;
+
+    return 0;
+}
+
+int
+_libssh2_st_bignum_rand(_libssh2_bn *rnd, int bits, int top, int bottom)
+{
+    unsigned char *bignum;
+    unsigned long length;
+
+    if (!rnd)
+        return -1;
+
+    length = (unsigned long)(ceil((float)bits / 8) * sizeof(unsigned char));
+    if (_libssh2_st_bignum_resize(rnd, length))
+        return -1;
+
+    bignum = rnd->bignum;
+
+    if (_libssh2_random(bignum, length))
+        return -1;
+
+    /* calculate significant bits in most significant byte */
+    bits %= 8;
+
+    /* fill most significant byte with zero padding */
+    bignum[0] &= (1 << (8 - bits)) - 1;
+
+    /* set some special last bits in most significant byte */
+    if (top == 0)
+        bignum[0] |= (1 << (7 - bits));
+    else if (top == 1)
+        bignum[0] |= (3 << (6 - bits));
+
+    /* make odd by setting first bit in least significant byte */
+    if (bottom)
+        bignum[length - 1] |= 1;
+
+    return 0;
+}
+
+int
+_libssh2_st_bignum_mod_exp(_libssh2_bn *r,
+                               _libssh2_bn *a,
+                               _libssh2_bn *p,
+                               _libssh2_bn *m,
+                               _libssh2_bn_ctx *bnctx)
+{
+    SecKeyRef key;
+    unsigned long length = 0;
+    int keyError = _libssh2_rsa_new(&key, p->bignum, p->length,
+                                          m->bignum, m->length,
+                                          NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0);
+
+    if (keyError)
+        return keyError;
+
+    SecKeyEncrypt(key, kSecPaddingNone, a->bignum, a->length, 0, &length);
+
+    length = (a->length > length) ? a->length : length;
+    _libssh2_st_bignum_resize(r, length);
+
+    return SecKeyEncrypt(key, kSecPaddingNone, a->bignum, a->length, r->bignum, r->length);
+
+/*
+    BCRYPT_KEY_HANDLE hKey;
+    BCRYPT_RSAKEY_BLOB *rsakey;
+    unsigned char *key, *bignum;
+    unsigned long keylen, offset, length;
+    int ret;
+
+    (void)bnctx;
+
+    if (!r || !a || !p || !m)
+        return -1;
+
+    offset = sizeof(BCRYPT_RSAKEY_BLOB);
+    keylen = offset + p->length + m->length;
+
+    key = malloc(keylen);
+    if (!key)
+        return -1;
+
+    // https://msdn.microsoft.com/library/windows/desktop/aa375531.aspx
+    rsakey = (BCRYPT_RSAKEY_BLOB *)key;
+    rsakey->Magic = BCRYPT_RSAPUBLIC_MAGIC;
+    rsakey->BitLength = m->length * 8;
+    rsakey->cbPublicExp = p->length;
+    rsakey->cbModulus = m->length;
+    rsakey->cbPrime1 = 0;
+    rsakey->cbPrime2 = 0;
+
+    memcpy(key + offset, p->bignum, p->length);
+    offset += p->length;
+
+    memcpy(key + offset, m->bignum, m->length);
+
+    ret = BCryptImportKeyPair(_libssh2_wincng.hAlgRSA, NULL,
+                              BCRYPT_RSAPUBLIC_BLOB, &hKey, key, keylen,
+                              BCRYPT_NO_KEY_VALIDATION);
+
+    if (BCRYPT_SUCCESS(ret)) {
+        ret = BCryptEncrypt(hKey, a->bignum, a->length, NULL, NULL, 0,
+                            NULL, 0, &length, BCRYPT_PAD_NONE);
+        if (BCRYPT_SUCCESS(ret)) {
+            if (!_libssh2_st_bignum_resize(r, length)) {
+                length = max(a->length, length);
+                bignum = malloc(length);
+                if (bignum) {
+                    offset = length - a->length;
+                    memset(bignum, 0, offset);
+                    memcpy(bignum + offset, a->bignum, a->length);
+
+                    ret = BCryptEncrypt(hKey, bignum, length, NULL, NULL, 0,
+                                        r->bignum, r->length, &offset,
+                                        BCRYPT_PAD_NONE);
+
+                    _libssh2_st_safe_free(bignum, length);
+
+                    if (BCRYPT_SUCCESS(ret)) {
+                        _libssh2_st_bignum_resize(r, offset);
+                    }
+                } else
+                    ret = STATUS_NO_MEMORY;
+            } else
+                ret = STATUS_NO_MEMORY;
+        }
+
+        BCryptDestroyKey(hKey);
+    }
+
+    _libssh2_st_safe_free(key, keylen);
+
+    return BCRYPT_SUCCESS(ret) ? 0 : -1;
+*/
+}
+
+int
+_libssh2_st_bignum_set_word(_libssh2_bn *bn, unsigned long word)
+{
+    unsigned long offset, number, bits, length;
+
+    if (!bn)
+        return -1;
+
+    bits = 0;
+    number = word;
+    while (number >>= 1)
+        bits++;
+
+    length = (unsigned long) (ceil(((double)(bits + 1)) / 8.0) *
+                              sizeof(unsigned char));
+    if (_libssh2_st_bignum_resize(bn, length))
+        return -1;
+
+    for (offset = 0; offset < length; offset++)
+        bn->bignum[offset] = (word >> (offset * 8)) & 0xff;
+
+    return 0;
+}
+
+unsigned long
+_libssh2_st_bignum_bits(const _libssh2_bn *bn)
+{
+    unsigned char number;
+    unsigned long offset, length, bits;
+
+    if (!bn)
+        return 0;
+
+    length = bn->length - 1;
+
+    offset = 0;
+    while (!(*(bn->bignum + offset)) && (offset < length))
+        offset++;
+
+    bits = (length - offset) * 8;
+    number = bn->bignum[offset];
+
+    while (number >>= 1)
+        bits++;
+
+    bits++;
+
+    return bits;
+}
+
+void
+_libssh2_st_bignum_from_bin(_libssh2_bn *bn, unsigned long len,
+                                const unsigned char *bin)
+{
+    unsigned char *bignum;
+    unsigned long offset, length, bits;
+
+    if (!bn || !bin || !len)
+        return;
+
+    if (_libssh2_st_bignum_resize(bn, len))
+        return;
+
+    memcpy(bn->bignum, bin, len);
+
+    bits = _libssh2_st_bignum_bits(bn);
+    length = (unsigned long) (ceil(((double)bits) / 8.0) *
+                              sizeof(unsigned char));
+
+    offset = bn->length - length;
+    if (offset > 0) {
+        memmove(bn->bignum, bn->bignum + offset, length);
+
+#ifdef LIBSSH2_CLEAR_MEMORY
+        _libssh2_st_zeromemory(bn->bignum + length, offset);
+#endif
+
+        bignum = realloc(bn->bignum, length);
+        if (bignum) {
+            bn->bignum = bignum;
+            bn->length = length;
+        }
+    }
+}
+
+void
+_libssh2_st_bignum_to_bin(const _libssh2_bn *bn, unsigned char *bin)
+{
+    if (bin && bn && bn->bignum && bn->length > 0) {
+        memcpy(bin, bn->bignum, bn->length);
+    }
+}
+
+    static void
+_libssh2_st_safe_free(void *buf, int len)
+{
+#ifndef LIBSSH2_CLEAR_MEMORY
+    (void)len;
+#endif
+
+    if (!buf)
+        return;
+
+#ifdef LIBSSH2_CLEAR_MEMORY
+    if (len > 0)
+        _libssh2_st_zeromemory(buf, len);
+#endif
+
+    free(buf);
+}
+
+void
+_libssh2_st_bignum_free(_libssh2_bn *bn)
+{
+    if (bn) {
+        if (bn->bignum) {
+            _libssh2_st_safe_free(bn->bignum, bn->length);
+            bn->bignum = NULL;
+        }
+        bn->length = 0;
+        _libssh2_st_safe_free(bn, sizeof(_libssh2_bn));
+    }
+}
+#endif /* LIBSSH2_SECURETRANSPORT */

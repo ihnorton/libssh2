@@ -100,7 +100,7 @@ extern int _libssh2_dsa_free(libssh2_dsa_ctx *dsa);
 /*
  * SecureTransport BigNum implementation
  */
-
+/*
 typedef void *_libssh2_bn_ctx;
 #define _libssh2_bn_ctx_new() NULL
 #define _libssh2_bn_ctx_free(bnctx)
@@ -134,3 +134,46 @@ do {\
 #define _libssh2_bn_bits(bn) CCBigNumBitCount(bn)
 
 #define _libssh2_bn_free(bn) CCBigNumFree(bn)
+*/
+
+typedef void *_libssh2_bn_ctx;
+#define _libssh2_bn_ctx_new() NULL
+#define _libssh2_bn_ctx_free(bnctx)
+
+/*******************************************************************/
+/*
+ * SecureTransport backend: BigNumber structure
+ */
+
+struct _libssh2_st_bignum {
+    unsigned char *bignum;
+    unsigned long length;
+};
+
+#define _libssh2_bn struct _libssh2_st_bignum
+
+/*
+ * SecureTransport backend: BigNumber functions
+ */
+
+_libssh2_bn *_libssh2_st_bignum_init(void);
+
+#define _libssh2_bn_init() \
+  _libssh2_st_bignum_init()
+#define _libssh2_bn_init_from_bin() \
+  _libssh2_bn_init()
+#define _libssh2_bn_rand(bn, bits, top, bottom) \
+  _libssh2_st_bignum_rand(bn, bits, top, bottom)
+#define _libssh2_bn_mod_exp(r, a, p, m, ctx) \
+  _libssh2_st_bignum_mod_exp(r, a, p, m, ctx)
+#define _libssh2_bn_set_word(bn, word) \
+  _libssh2_st_bignum_set_word(bn, word)
+#define _libssh2_bn_from_bin(bn, len, bin) \
+  _libssh2_st_bignum_from_bin(bn, len, bin)
+#define _libssh2_bn_to_bin(bn, bin) \
+  _libssh2_st_bignum_to_bin(bn, bin)
+#define _libssh2_bn_bytes(bn) bn->length
+#define _libssh2_bn_bits(bn) \
+  _libssh2_st_bignum_bits(bn)
+#define _libssh2_bn_free(bn) \
+  _libssh2_st_bignum_free(bn)
